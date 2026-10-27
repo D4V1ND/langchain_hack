@@ -131,9 +131,9 @@ def consolidate_pending() -> int:
 
 ## 6. Setup
 
-- Install into the `.venv`: `PySide6`, `pynput`, `deepagents`, `langchain-openai`
-- Set `OPENAI_API_KEY` as an environment variable
-- Add `.venv/` and `data/` to `.gitignore`
+- Install into the `.venv`: `PySide6`, `pynput`, `deepagents`, `langchain-openai`, `python-dotenv`
+- Put `OPENAI_API_KEY` in `.env` (git-ignored; copy `.env.example`). `brain.py` loads it with `load_dotenv()`
+- `.gitignore` already covers `.env`, `.venv/` and `data/`
 - Each person edits only their own files (`app.py` and `panel.html` for A, `brain.py` for B), so both can push to `main` with few conflicts
 
 ---
