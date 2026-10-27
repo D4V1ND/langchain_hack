@@ -1,6 +1,6 @@
 # Brain: agent and memory (Person B)
 
-You own `brain.py` and everything in `data/`: what goes into each prompt, how a Session is remembered, caching, Transcripts and Notes. The app calls you only through the 5 functions in the [contract](SPEC.md#4-the-contract) and never touches your files.
+You own `brain.py` and everything in `data/`: what goes into each prompt, how a Session is remembered, caching, Transcripts and Notes. The app calls you only through the 4 functions and `LiveTranscriber` in the [contract](SPEC.md#4-the-contract) and never touches your files.
 
 **First job (first 15 minutes):** push `brain.py` with the exact contract signatures returning fake data, so Person A isn't blocked.
 
@@ -19,7 +19,7 @@ You own `brain.py` and everything in `data/`: what goes into each prompt, how a 
 | 7 | **Consolidator.** A sub-agent with `read_transcript`, which the tutor hands work to through Deep Agents' `task` tool. Then mark the Transcript `consolidated: true` | One Session about A = πr² plus the diameter question gives 2 Notes |
 | 8 | **`consolidate_pending()`.** Consolidate every Transcript that is still `consolidated: false` | Kill the app mid-save, restart it, and the Notes appear |
 | 9 | **`notebook.html`.** Rebuild it from `notes.json` after every save. Newest first, each Note collapsible, a search box, KaTeX for statements | It opens in a browser, and the search filters Notes |
-| 10 | **`transcribe()`.** Send the WAV to OpenAI's `gpt-transcribe` (constant `TRANSCRIBE_MODEL`, overridable with `STUDYLENS_TRANSCRIBE_MODEL`), with a short maths-context prompt | A spoken "Why is r squared?" comes back as that text |
+| 10 | **`LiveTranscriber`.** One websocket to `wss://api.openai.com/v1/realtime?intent=transcription`, model `gpt-live-transcribe` (constant `LIVE_TRANSCRIBE_MODEL`, overridable with `STUDYLENS_LIVE_TRANSCRIBE_MODEL`), 24 kHz PCM, `turn_detection: null` (the app finds pauses). Forward transcription deltas to `on_partial` and `completed` to `on_final`. No prompt: a maths hint made it hear "Why" as "Y" | Streamed speech gives live partial text, then the exact final text ~1 s after commit |
 
 ---
 

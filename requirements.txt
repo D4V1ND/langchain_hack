@@ -5,3 +5,4 @@ langchain-openai
 python-dotenv
 pillow
 pytest
+websockets

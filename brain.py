@@ -14,6 +14,7 @@ import io
 import json
 import logging
 import os
+import queue
 import re
 import sys
 import threading
@@ -40,8 +41,9 @@ log = logging.getLogger("studylens.brain")
 
 # One constant for the image-reading model. STUDYLENS_MODEL overrides it.
 MODEL = os.getenv("STUDYLENS_MODEL", "openai:gpt-5.1")
-# Speech-to-text for spoken questions; OpenAI's recommended model for recorded speech.
-TRANSCRIBE_MODEL = os.getenv("STUDYLENS_TRANSCRIBE_MODEL", "gpt-transcribe")
+# Live speech-to-text for spoken questions: OpenAI's recommended realtime transcription model.
+LIVE_TRANSCRIBE_MODEL = os.getenv("STUDYLENS_LIVE_TRANSCRIBE_MODEL", "gpt-live-transcribe")
+LIVE_AUDIO_RATE = 24000  # the app streams 24 kHz mono 16-bit PCM
 
 # The same `detail` on every image keeps the cached prompt prefix identical.
 IMAGE_DETAIL = "high"
@@ -104,13 +106,17 @@ plain sentence if it is a rule or method.
 - why_here: why it appears in what the student selected.
 - mistakes: common mistakes with this Concept.
 - example: one short worked example.
-- html: the page the student sees in a 440 px wide panel, designed fresh for this \
-answer. Write an HTML fragment (no <html>, <head> or <body>). Lead with the answer, \
-then teach the Concept in whatever layout works best: headings, lists, tables, \
-colour via a <style> block, and inline <svg> for small diagrams. Write maths with \
-MathML (<math>) or <sup>/<sub>, never LaTeX: nothing renders LaTeX in the panel. \
-Scripts, links and external images or fonts are blocked, so don't use them. \
-Keep it under about 300 words.
+- html: the page the student sees on a cream card in a 430 px wide panel, designed \
+fresh for this answer. Write an HTML fragment (no <html>, <head> or <body>). Lead \
+with the short answer in <div class="answer">, then teach the Concept in whatever \
+layout works best. The panel has a hand-drawn style and already styles h2, h3, \
+lists and tables, plus these classes: "answer" (the short answer), "formula" (a big \
+centred formula), "box" (a highlighted idea) and "warn" (a common mistake). Use them \
+instead of your own fonts, borders or colours. Draw small diagrams with inline <svg> \
+using only these colours: ink #26262b (2px strokes), paper #f6f1e4, teal #6cc3bc, \
+mustard #f2b632, coral #e2733f, sage #a8c6a6. Write maths with MathML (<math>) or \
+<sup>/<sub>, never LaTeX: nothing renders LaTeX in the panel. Scripts, links and \
+external images or fonts are blocked, so don't use them. Keep it under about 300 words.
 Use `answer` and a short `html` alone when you cannot fill the rest.
 
 If the Selection is unreadable or ambiguous, fill in only `answer` and `html`, with \
@@ -908,16 +914,78 @@ def consolidate_pending() -> int:
     return total
 
 
-def transcribe(audio_wav: bytes) -> str:
-    """Turn a spoken question (WAV bytes) into text. Raises on API errors."""
-    from openai import OpenAI  # comes with langchain-openai
+class LiveTranscriber:
+    """Streams spoken questions to gpt-live-transcribe over one websocket.
 
-    result = OpenAI().audio.transcriptions.create(
-        model=TRANSCRIBE_MODEL,
-        file=("question.wav", audio_wav, "audio/wav"),
-        prompt="A student asking about a maths or science formula or solution step on their screen.",
-    )
-    return result.text.strip()
+    The app decides where a spoken turn ends (it detects the pause) and calls commit().
+    on_partial(text) fires as words arrive, on_final(text) once per committed turn, and
+    on_error(exc) if the connection fails. All three run on a background thread.
+    """
+
+    URL = "wss://api.openai.com/v1/realtime?intent=transcription"
+
+    def __init__(self, on_partial, on_final, on_error):
+        self._outbox: "queue.Queue[Optional[dict]]" = queue.Queue()
+        self._callbacks = (on_partial, on_final, on_error)
+        self._closed = False
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def append(self, pcm: bytes) -> None:
+        """Queue 24 kHz mono 16-bit PCM audio. Safe to call before the connection is up."""
+        self._outbox.put({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode()})
+
+    def commit(self) -> None:
+        """End the current spoken turn; its final text arrives via on_final."""
+        self._outbox.put({"type": "input_audio_buffer.commit"})
+
+    def clear(self) -> None:
+        """Drop audio sent since the last commit (a cough or a click, not a question)."""
+        self._outbox.put({"type": "input_audio_buffer.clear"})
+
+    def close(self) -> None:
+        self._closed = True
+        self._outbox.put(None)
+
+    def _run(self) -> None:
+        from websockets.sync.client import connect
+
+        on_partial, on_final, on_error = self._callbacks
+        session = {"type": "session.update", "session": {"type": "transcription", "audio": {"input": {
+            "format": {"type": "audio/pcm", "rate": LIVE_AUDIO_RATE},
+            # No prompt: a maths-flavoured one made it hear "Why" as "Y".
+            "transcription": {"model": LIVE_TRANSCRIBE_MODEL},
+            "turn_detection": None,  # gpt-live-transcribe needs the client to find turn ends
+        }}}}
+        try:
+            headers = {"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]}
+            with connect(self.URL, additional_headers=headers) as ws:
+                ws.send(json.dumps(session))
+                threading.Thread(target=self._send_loop, args=(ws,), daemon=True).start()
+                partial: dict[str, str] = {}
+                for raw in ws:
+                    event = json.loads(raw)
+                    kind = event.get("type")
+                    if kind == "conversation.item.input_audio_transcription.delta":
+                        text = partial.get(event["item_id"], "") + event.get("delta", "")
+                        partial[event["item_id"]] = text
+                        on_partial(text)
+                    elif kind == "conversation.item.input_audio_transcription.completed":
+                        partial.pop(event["item_id"], None)
+                        on_final((event.get("transcript") or "").strip())
+                    elif kind == "error":
+                        raise RuntimeError((event.get("error") or {}).get("message", "live transcription error"))
+        except Exception as exc:  # includes the websocket closing under us
+            if not self._closed:
+                on_error(exc)
+
+    def _send_loop(self, ws) -> None:
+        try:
+            while (message := self._outbox.get()) is not None:
+                ws.send(json.dumps(message))
+        except Exception:
+            pass  # the receive loop reports connection errors
+        finally:
+            ws.close()
 
 
 # ---------------------------------------------------------------------------

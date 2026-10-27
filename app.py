@@ -1,13 +1,15 @@
+from array import array
 from html import escape
-import io
+import math
+import os
 from pathlib import Path
 import sys
 import threading
-import wave
 
 from pynput import keyboard
 from PySide6.QtCore import QBuffer, QIODevice, QObject, QPoint, QRect, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import (
+    QColor,
     QCursor,
     QDesktopServices,
     QGuiApplication,
@@ -23,6 +25,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMenu,
     QPushButton,
@@ -37,8 +40,29 @@ import brain
 
 HOTKEY = "<ctrl>+<alt>+l"
 PAD = 40
-RATE = 16000  # mic sample rate: 16 kHz mono 16-bit is plenty for speech
+RATE = brain.LIVE_AUDIO_RATE  # the mic streams 24 kHz mono 16-bit, what live transcription expects
+# Turn detection (calibration knobs): how the app decides you've finished speaking.
+SILENCE_MS = 1100    # this much quiet after speech ends your question
+MIN_SPEECH_MS = 300  # shorter sounds (a cough, a click) are ignored
+MAX_TURN_MS = 30000  # a turn this long ends anyway, in case the room never gets quiet
+PREROLL_MS = 300     # audio kept from just before you started, so the first word isn't clipped
 TEMPLATE = Path(__file__).with_name("panel.html").read_text(encoding="utf-8")
+
+# Panel chrome, matching panel.html: teal sky, cream paper, ink outlines, mustard and coral accents.
+STYLE = """
+#panel { background: #6cc3bc; }
+#title { color: #26262b; font: bold 23px "Ink Free"; }
+QPushButton { background: #f2b632; color: #26262b; border: 2px solid #26262b; border-bottom-width: 4px;
+              border-radius: 12px; font-size: 15px; }
+QPushButton:hover { background: #f5c45a; }
+QPushButton:pressed { border-bottom-width: 2px; margin-top: 2px; }
+QPushButton:disabled { background: #d8cfae; color: #6d6a60; }
+QPushButton[recording="true"] { background: #e2733f; color: #f6f1e4; }
+#close { background: #f6f1e4; font-weight: bold; }
+QLineEdit { background: #f6f1e4; color: #26262b; border: 2px solid #26262b; border-bottom-width: 4px;
+            border-radius: 14px; padding: 6px 12px; font: 14px "Segoe UI"; selection-background-color: #f2b632; }
+QLineEdit:disabled { background: #e6dfcc; color: #6d6a60; }
+"""
 
 
 def make_images(shot: QImage, path: QPainterPath, logical_width: int) -> tuple[bytes, bytes]:
@@ -68,46 +92,111 @@ def make_images(shot: QImage, path: QPainterPath, logical_width: int) -> tuple[b
 def page(question: str, explanation, status: str, error: str) -> str:
     """The panel page: our escaped header, then the HTML the AI wrote for this answer."""
     header = "".join(
-        f'<p class="{cls}">{escape(text)}</p>'
-        for cls, text in (("muted", question), ("muted", status), ("error", error))
+        f'<div class="{cls}">{escape(text)}</div>'
+        for cls, text in (("q", question), ("status", status), ("error", error))
         if text
     )
-    if explanation is None:
-        body = "" if header else '<p class="muted">Type your question below.</p>'
+    if explanation is not None:
+        body = f'<div class="card">{explanation.html or "<p>" + escape(explanation.answer) + "</p>"}</div>'
+    elif header:
+        body = ""
     else:
-        body = explanation.html or f"<p>{escape(explanation.answer)}</p>"
+        body = '<p class="hint">Ask out loud, or type your question below.</p>'
     return TEMPLATE.replace("<!--HEADER-->", header, 1).replace("<!--BODY-->", body, 1)
 
 
-def wav_bytes(pcm: bytes) -> bytes:
-    """Wrap raw 16 kHz mono 16-bit samples in a WAV file."""
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(RATE)
-        w.writeframes(pcm)
-    return buffer.getvalue()
+def loudness(chunk: bytes) -> float:
+    """RMS level of 16-bit PCM audio."""
+    samples = array("h", chunk[: len(chunk) // 2 * 2])
+    return math.sqrt(sum(s * s for s in samples) / len(samples)) if samples else 0.0
 
 
-class Recorder:
-    """Records the default microphone until stop(), which returns WAV bytes."""
+class TurnDetector:
+    """Finds where a spoken question starts and ends, from mic loudness alone.
+
+    feed(chunk) returns (action, audio_to_send):
+      "quiet"  nothing to send          "start"  you began talking (audio includes the pre-roll)
+      "speech" keep sending             "end"    you paused long enough: send, then commit
+      "blip"   too short to be a question (a cough or click): clear it
+    """
 
     def __init__(self):
+        self.floor = 200.0  # running estimate of the room's background loudness
+        self.reset()
+
+    def reset(self):
+        self.speaking = False
+        self.voiced_ms = self.quiet_ms = self.turn_ms = 0.0
+        self.preroll = b""
+
+    def feed(self, chunk: bytes) -> tuple[str, bytes]:
+        ms = len(chunk) / 2 / RATE * 1000
+        level = loudness(chunk)
+        # ponytail: plain loudness, so a noisy room can cut in; OpenAI-side semantic turn detection if it matters.
+        loud = level > self.floor * 2.5 + 300
+        if not self.speaking:
+            if not loud:
+                self.floor = 0.95 * self.floor + 0.05 * level
+                self.preroll = (self.preroll + chunk)[-int(RATE * 2 * PREROLL_MS / 1000):]
+                return "quiet", b""
+            self.speaking, self.voiced_ms, self.quiet_ms, self.turn_ms = True, ms, 0.0, ms
+            audio, self.preroll = self.preroll + chunk, b""
+            return "start", audio
+        self.turn_ms += ms
+        if loud:
+            self.voiced_ms += ms
+            self.quiet_ms = 0.0
+        else:
+            self.quiet_ms += ms
+        if self.quiet_ms >= SILENCE_MS or self.turn_ms >= MAX_TURN_MS:
+            self.speaking = False
+            return ("end" if self.voiced_ms >= MIN_SPEECH_MS else "blip"), chunk
+        return "speech", chunk
+
+
+def pick_mic():
+    """The mic whose name contains STUDYLENS_MIC (from .env), else Windows' default mic."""
+    wanted = os.getenv("STUDYLENS_MIC", "").strip().lower()
+    for device in QMediaDevices.audioInputs():
+        if wanted and wanted in device.description().lower():
+            return device
+    return QMediaDevices.defaultAudioInput()
+
+
+class Mic:
+    """Streams the chosen microphone to on_chunk as 24 kHz mono 16-bit PCM (on the UI thread)."""
+
+    def __init__(self, on_chunk):
         fmt = QAudioFormat()
         fmt.setSampleRate(RATE)
         fmt.setChannelCount(1)
         fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-        # ponytail: no length cap; a forgotten recording runs until stopped (API limit is 25 MB, ~13 min).
-        self.source = QAudioSource(QMediaDevices.defaultAudioInput(), fmt)
-        self.chunks = []
+        self.source = QAudioSource(pick_mic(), fmt)
         self.io = self.source.start()
-        self.io.readyRead.connect(lambda: self.chunks.append(self.io.readAll().data()))
+        self.io.readyRead.connect(lambda: on_chunk(self.io.readAll().data()))
 
-    def stop(self) -> bytes:
-        self.chunks.append(self.io.readAll().data())
+    def stop(self):
         self.source.stop()
-        return wav_bytes(b"".join(self.chunks))
+
+
+def round_corners(widget):
+    """Windows 11: rounded corners and an ink-coloured edge for a frameless window."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    hwnd = int(widget.winId())
+    for attribute, value in ((33, 2), (34, 0x002B2626)):  # corner preference = round; border colour 0x00BBGGRR
+        v = ctypes.c_int(value)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(v), ctypes.sizeof(v))
+
+
+class Header(QWidget):
+    """The panel's title bar. Dragging it moves the frameless window."""
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.window().windowHandle().startSystemMove()
 
 
 class PanelPage(QWebEnginePage):
@@ -178,7 +267,8 @@ class Overlay(QWidget):
 
 class Panel(QWidget):
     def __init__(self, controller, snapshot_png, crop_png, selection, screen):
-        super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
+        super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint
+                         | Qt.WindowType.FramelessWindowHint)
         self.controller = controller
         self.snapshot_png = snapshot_png
         self.crop_png = crop_png
@@ -189,27 +279,117 @@ class Panel(QWidget):
         self.question = ""
         self.explanation = None
         self.setWindowTitle("StudyLens")
-        self.resize(440, 560)
+        self.setObjectName("panel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setStyleSheet(STYLE)
+        self.resize(460, 600)
         self.move(panel_pos(selection, screen, self.width(), self.height()))
+        round_corners(self)
+
+        header = Header()
+        title = QLabel("StudyLens")
+        title.setObjectName("title")
+        close = QPushButton("✕")
+        close.setObjectName("close")
+        close.setToolTip("Close (saves your notes)")
+        close.setFixedSize(32, 32)
+        close.clicked.connect(self.close)
+        top = QHBoxLayout(header)
+        top.setContentsMargins(6, 0, 0, 0)
+        top.addWidget(title)
+        top.addStretch()
+        top.addWidget(close)
 
         self.view = QWebEngineView()
         self.view.setPage(PanelPage(self.view))
+        self.view.page().setBackgroundColor(QColor("#6cc3bc"))  # no white flash between renders
         self.view.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, False)
         self.input = QLineEdit()
         self.input.setPlaceholderText("Ask about your selection…")
+        self.input.setMinimumHeight(42)
         self.input.returnPressed.connect(self.ask)
-        self.recorder = None
+        self.input.textEdited.connect(self.typed)
+        self.voice = None  # (Mic, LiveTranscriber, TurnDetector) while voice is on
         self.mic = QPushButton("🎤")
-        self.mic.setToolTip("Ask by voice")
-        self.mic.setFixedWidth(40)
-        self.mic.clicked.connect(self.toggle_mic)
+        self.mic.setFixedSize(48, 42)
+        self.mic.clicked.connect(lambda: self.set_voice(self.voice is None))
         row = QHBoxLayout()
+        row.setSpacing(8)
         row.addWidget(self.input, 1)
         row.addWidget(self.mic)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 12)
+        layout.setSpacing(6)
+        layout.addWidget(header)
         layout.addWidget(self.view, 1)
         layout.addLayout(row)
         self.render()
+        self.set_voice(True)  # listening from the start; the 🎤 button turns it off
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:  # no title bar, so Esc closes too
+            self.close()
+        else:
+            super().keyPressEvent(event)
+
+    def set_voice(self, on):
+        if on == (self.voice is not None):
+            return
+        if on:
+            call = self.controller.call.emit  # transcriber callbacks arrive on a background thread
+            transcriber = brain.LiveTranscriber(
+                lambda text: call(lambda: self.heard_partial(text)),
+                lambda text: call(lambda: self.heard(text)),
+                lambda exc: call(lambda: self.voice_failed(exc)),
+            )
+            self.voice = (Mic(self.listen), transcriber, TurnDetector())
+        else:
+            mic, transcriber, _ = self.voice
+            mic.stop()
+            transcriber.close()
+            self.voice = None
+        self.mic.setToolTip("Listening. Click to type instead" if on else "Click to talk")
+        self.mic.setProperty("recording", on)
+        self.mic.style().unpolish(self.mic)  # re-apply the [recording] style
+        self.mic.style().polish(self.mic)
+        self.input.setPlaceholderText("Listening… just ask, or type here" if on else "Type your question…")
+        if not on:
+            self.input.setFocus()
+
+    def listen(self, chunk):
+        if self.voice is None or self.asking:
+            return  # paused while the tutor thinks
+        _, transcriber, detector = self.voice
+        action, audio = detector.feed(chunk)
+        if audio:
+            transcriber.append(audio)
+        if action == "end":
+            transcriber.commit()
+        elif action == "blip":
+            transcriber.clear()
+            self.input.clear()
+
+    def heard_partial(self, text):
+        if self.voice is not None and not self.asking and not self.closed:
+            self.input.setText(text.strip())  # live captions while you speak
+
+    def heard(self, text):
+        if self.voice is None or self.asking or self.closed:
+            return
+        if not text:
+            self.input.clear()
+            return
+        self.input.setText(text)
+        self.ask()  # you stopped talking: send it like pressing Enter
+
+    def typed(self, _text):
+        self.set_voice(False)  # typing means you'd rather type; keeps any caption so you can fix it
+
+    def voice_failed(self, exc):
+        if self.closed:
+            return
+        self.set_voice(False)
+        self.render(error="Voice stopped (couldn't reach live transcription). You can type instead.")
 
     def render(self, status="", error=""):
         html = page(self.question, self.explanation, status, error)
@@ -242,6 +422,8 @@ class Panel(QWidget):
         self.input.setEnabled(True)
         self.mic.setEnabled(True)
         self.input.setFocus()
+        if self.voice is not None:
+            self.voice[2].reset()  # listen afresh for the next question
         self.render()
 
     def ask_failed(self, exc):
@@ -252,44 +434,9 @@ class Panel(QWidget):
         self.input.setEnabled(True)
         self.mic.setEnabled(True)
         self.input.setFocus()
+        if self.voice is not None:
+            self.voice[2].reset()
         self.render(error="Couldn't reach the AI, try again.")
-
-    def toggle_mic(self):
-        if self.recorder is None:
-            self.recorder = Recorder()
-            self.mic.setText("■")
-            self.mic.setToolTip("Stop and send")
-            self.input.setEnabled(False)
-            self.render(status="Listening… click ■ when you're done.")
-            return
-        audio = self.recorder.stop()
-        self.recorder = None
-        self.mic.setText("🎤")
-        self.mic.setToolTip("Ask by voice")
-        if len(audio) < 44 + RATE // 2:  # under a quarter second: an accidental click
-            self.input.setEnabled(True)
-            self.render()
-            return
-        self.mic.setEnabled(False)
-        self.render(status="Transcribing…")
-        self.controller.in_background(lambda: brain.transcribe(audio), self.heard, self.hear_failed)
-
-    def heard(self, text):
-        self.mic.setEnabled(True)
-        self.input.setEnabled(True)
-        if self.closed:
-            return
-        if not text:
-            self.render(error="Didn't catch that. Try again or type your question.")
-            return
-        self.input.setText(text)
-        self.ask()  # spoken questions are sent straight away
-
-    def hear_failed(self, exc):
-        self.mic.setEnabled(True)
-        self.input.setEnabled(True)
-        if not self.closed:
-            self.render(error="Couldn't transcribe. Try again or type your question.")
 
     def end_session(self):
         # Wait for an in-flight ask before saving its Transcript.
@@ -305,9 +452,7 @@ class Panel(QWidget):
 
     def closeEvent(self, event):
         self.closed = True
-        if self.recorder is not None:
-            self.recorder.stop()
-            self.recorder = None
+        self.set_voice(False)
         self.end_session()
         super().closeEvent(event)
 

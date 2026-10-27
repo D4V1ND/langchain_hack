@@ -8,8 +8,9 @@ from PySide6.QtGui import QColor, QImage, QPainterPath
 from PySide6.QtCore import QRect
 from PySide6.QtWidgets import QApplication
 
-import io, wave
-from app import RATE, make_images, page, panel_pos, wav_bytes
+import math
+from array import array
+from app import RATE, SILENCE_MS, TurnDetector, make_images, page, panel_pos
 from brain import Explanation
 
 
@@ -46,9 +47,21 @@ html = page("<b>q</b>", Explanation(answer="a", html="<svg id='d'></svg>"), "", 
 assert "&lt;b&gt;q&lt;/b&gt;" in html and "<svg id='d'></svg>" in html
 assert "default-src 'none'" in html
 assert "<p>a &lt; b</p>" in page("", Explanation(answer="a < b"), "", "")
-assert "Type your question below." in page("", None, "", "")
+assert "type your question below" in page("", None, "", "")
 
-with wave.open(io.BytesIO(wav_bytes(b"\x00\x00" * RATE)), "rb") as w:
-    assert (w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()) == (1, 2, RATE, RATE)
+# Turn detection: quiet room -> speech -> pause ends the turn; a click is a "blip", not a question.
+def tone(amp, ms=50):
+    return array("h", (int(amp * math.sin(i / 8)) for i in range(RATE * ms // 1000))).tobytes()
+
+pause = math.ceil(SILENCE_MS / 50)
+d = TurnDetector()
+assert {d.feed(tone(30))[0] for _ in range(20)} == {"quiet"}
+action, audio = d.feed(tone(6000))
+assert action == "start" and len(audio) > len(tone(6000))  # includes the pre-roll
+assert {d.feed(tone(6000))[0] for _ in range(10)} == {"speech"}
+after = [d.feed(tone(30))[0] for _ in range(pause)]
+assert after[-1] == "end" and set(after[:-1]) == {"speech"}
+assert d.feed(tone(6000))[0] == "start"
+assert [d.feed(tone(30))[0] for _ in range(pause)][-1] == "blip"
 
 print("ok")

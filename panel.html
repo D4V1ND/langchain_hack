@@ -2,20 +2,62 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <!-- The body is written by the AI. Block everything external; app.py also turns JavaScript off. -->
+  <!-- The card's content is written by the AI. Block everything external; app.py also turns JavaScript off. -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:">
   <style>
-    body { margin: 16px; color: #252525; background: #fff; font: 14px/1.55 "Segoe UI", sans-serif; overflow-wrap: anywhere; }
-    .muted { color: #6b6b6b; }
-    .error { color: #ba2525; }
-    math { font-size: 1.1em; }
+    /* Hand-drawn look: teal sky, cream paper, ink outlines, mustard and coral accents. */
+    :root {
+      --ink: #26262b; --paper: #f6f1e4; --teal: #6cc3bc; --teal-dark: #2f7f79;
+      --mustard: #f2b632; --coral: #e2733f; --sage: #a8c6a6; --muted: #6d6a60;
+      --hand: "Ink Free", "Segoe Print", "Comic Sans MS", cursive;
+    }
+    html { background: var(--teal); }
+    ::-webkit-scrollbar { width: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--teal-dark); border: 2px solid var(--teal); border-radius: 6px; }
+    body { margin: 0; padding: 10px 14px 18px; color: var(--ink);
+           font: 14.5px/1.55 "Segoe UI", sans-serif; overflow-wrap: anywhere; }
+
+    /* Chat layout: the student's question on the right, the tutor's card on the left. */
+    .q { margin: 4px 0 14px auto; width: fit-content; max-width: 82%; position: relative;
+         background: var(--mustard); padding: 8px 14px; border-radius: 16px 16px 4px 16px; }
+    .status { margin: 0 0 12px; font: 700 17px var(--hand); color: var(--teal-dark); }
+    .error { margin: 0 0 12px; position: relative; background: #fbe2d6; padding: 8px 14px; border-radius: 12px; }
+    .card { position: relative; background: var(--paper); padding: 6px 16px 14px; border-radius: 16px; }
+    .hint { font: 700 18px var(--hand); color: var(--muted); margin: 10px 0; }
+
+    /* Wobbly ink border + hard offset shadow, drawn on a layer so the text stays crisp. */
+    .q::before, .card::before, .error::before {
+      content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+      border: 2.5px solid var(--ink); box-shadow: 4px 5px 0 var(--ink); filter: url(#rough);
+    }
+
+    h1, h2, h3 { font-family: var(--hand); font-weight: 700; line-height: 1.2; margin: 14px 0 6px; }
+    h1 { font-size: 25px; } h2 { font-size: 22px; } h3 { font-size: 19px; }
+    p { margin: 8px 0; }
+    ul, ol { margin: 6px 0; padding-left: 22px; } li { margin: 4px 0; }
+    math { font-size: 1.12em; }
     svg, img { max-width: 100%; height: auto; }
-    table { border-collapse: collapse; }
-    td, th { border: 1px solid #ddd; padding: 4px 8px; }
+    table { border-collapse: collapse; margin: 10px 0; }
+    td, th { border: 2px solid var(--ink); padding: 4px 8px; } th { background: var(--sage); }
+    code { background: #ebe4d1; padding: 1px 5px; border-radius: 5px; }
+
+    /* Ready-made pieces the AI is told to use. */
+    .answer { font-size: 15.5px; font-weight: 600; background: #fff6d6; border: 2px solid var(--ink);
+              border-radius: 12px; padding: 8px 12px; margin: 10px 0; }
+    .formula { text-align: center; font-size: 22px; margin: 12px 0; }
+    .box { background: #dcefeb; border: 2px solid var(--ink); border-radius: 12px; padding: 8px 12px; margin: 10px 0; }
+    .warn { background: #fbe2d6; border: 2px solid var(--ink); border-radius: 12px; padding: 8px 12px; margin: 10px 0; }
+    .box > :first-child, .warn > :first-child, .answer > :first-child { margin-top: 0; }
+    .box > :last-child, .warn > :last-child, .answer > :last-child { margin-bottom: 0; }
   </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="rough"><feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="7"/>
+    <feDisplacementMap in="SourceGraphic" scale="3.5"/></filter>
+</svg>
 <!--HEADER-->
 <!--BODY-->
 </body>

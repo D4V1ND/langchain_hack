@@ -13,7 +13,7 @@ Words in **bold** are defined in [CONTEXT.md](CONTEXT.md).
 | **Desktop app**: everything on screen (hotkey, drawing, panel, tray) | Person A | [SPEC-APP.md](SPEC-APP.md) |
 | **Brain**: agent, prompts, context, caching, Notes on disk | Person B (context and caching) | [SPEC-AGENT.md](SPEC-AGENT.md) |
 
-The two parts meet only through the 5 functions in [section 4](#4-the-contract). Agree on those first, then work apart.
+The two parts meet only through the 4 functions and the `LiveTranscriber` class in [section 4](#4-the-contract). Agree on those first, then work apart.
 
 ---
 
@@ -21,7 +21,7 @@ The two parts meet only through the 5 functions in [section 4](#4-the-contract).
 
 1. Press the hotkey. The screen under your mouse freezes (a **Snapshot**).
 2. Draw any shape around what confuses you (a **Selection**).
-3. The **Explanation Panel** opens next to it with a text box and a 🎤 button. Type your question, or click 🎤, speak, and click ■.
+3. The **Explanation Panel** opens next to it, already listening. Just ask out loud: your words appear as you speak, and the question is sent when you pause. Or click 🎤 (or start typing) to switch to text.
 4. The agent reads the Snapshot and your question, then shows an **Explanation**.
 5. Ask follow-ups in the same box. The panel updates.
 6. Close the panel. The conversation is saved as a **Transcript**, then turned into **Notes** (**Consolidation**).
@@ -56,8 +56,9 @@ The student is looking at a worked solution in a PDF and doesn't get one line.
 | What the AI sees | Full Snapshot with the Selection drawn on it in red, plus a zoomed crop | It sees both the surrounding problem and exactly what you mean. No text-recognition (OCR) step |
 | Model | OpenAI GPT (a model that reads images), set in one constant | The team has an OpenAI key |
 | First question | Typed in the panel's text box, the same box used for follow-ups | One input box to build |
-| Voice | A 🎤 button records the mic with Qt (16 kHz WAV), `gpt-transcribe` turns it into text, and the question is sent straight away. No LiveKit | A spoken question is one short upload, not a live stream. `gpt-transcribe` is OpenAI's recommended model for recorded speech |
-| Panel content | The agent designs a fresh HTML page (`html`) for every answer: layout, MathML maths, SVG diagrams. The panel shows it with JavaScript off and outside loads blocked. The agent still fills the fixed fields, which feed the Notes | Each answer gets the layout that teaches it best, and AI-written HTML can't run code |
+| Voice | On by default. While you talk, the mic streams to `gpt-live-transcribe` and your words appear live in the text box. The app detects a ~1 s pause and sends the question. Listening pauses while the tutor thinks. 🎤 turns voice off, and typing also switches to text. No LiveKit | Feels like talking to a person. `gpt-live-transcribe` is OpenAI's realtime transcription model; it leaves pause detection to the app, so only audio from when you're talking is sent |
+| Panel content | The agent designs a fresh HTML page (`html`) for every answer: layout, MathML maths, SVG diagrams, using the panel's ready-made classes and palette. The panel shows it with JavaScript off and outside loads blocked. The agent still fills the fixed fields, which feed the Notes | Each answer gets the layout that teaches it best, and AI-written HTML can't run code |
+| Panel look | A frameless, hand-drawn chat window inspired by messenger.abeto.co: teal background, cream card with wobbly ink border, mustard question bubble, hand-lettered headings (Windows' Ink Free font) | Friendly and game-like; no web fonts needed, so nothing loads from outside |
 | Several Concepts | The panel shows one Concept at a time (whatever the last question was about). Consolidation saves every Concept discussed | Follow-up insights aren't lost |
 | What a Note is about | A **Concept**: a formula, rule, theorem or method | Steps like "odd terms cancel by symmetry" also get Notes |
 | New Selection while a panel is open | Close the old panel (which consolidates it), then start the new one | One panel and one Session at a time |
@@ -112,8 +113,15 @@ def end_session(session_id: str) -> int:
 def consolidate_pending() -> int:
     """Consolidate any Transcripts not yet saved as Notes. Called once at startup. Returns Notes saved."""
 
-def transcribe(audio_wav: bytes) -> str:
-    """Turn a spoken question (WAV bytes) into text. Raises on API errors."""
+class LiveTranscriber:
+    """Streams spoken questions to gpt-live-transcribe. The app finds the pause and calls commit().
+    on_partial(text) fires as words arrive, on_final(text) once per turn, on_error(exc) on failure;
+    all three run on a background thread."""
+    def __init__(self, on_partial, on_final, on_error): ...
+    def append(self, pcm: bytes) -> None: ...   # 24 kHz mono 16-bit PCM
+    def commit(self) -> None: ...               # end of a spoken question
+    def clear(self) -> None: ...                # drop a cough or click
+    def close(self) -> None: ...
 ```
 
 **Rules for both sides**

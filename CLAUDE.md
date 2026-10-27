@@ -29,7 +29,7 @@ python brain.py test.png "Why is r squared?"    # run the brain alone on a scree
 
 ## Architecture
 
-Two halves that meet only through 5 functions in `brain.py` (SPEC.md §4):
+Two halves that meet only through 4 functions and the `LiveTranscriber` class in `brain.py` (SPEC.md §4):
 
 | Side | Files | Owns |
 |---|---|---|
