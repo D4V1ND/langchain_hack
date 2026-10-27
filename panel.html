@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StudyLens</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <style>
+    body { margin: 18px; color: #252525; background: #fff; font: 14px/1.55 "Segoe UI", sans-serif; overflow-wrap: anywhere; }
+    h2 { margin: 18px 0 8px; font-size: 19px; }
+    h3 { margin: 16px 0 6px; font-size: 14px; }
+    p { margin: 8px 0; white-space: pre-wrap; }
+    ul { margin: 6px 0; padding-left: 22px; }
+    li { margin: 5px 0; white-space: pre-wrap; }
+    .muted { color: #6b6b6b; }
+    .error { color: #ba2525; }
+    .statement { text-align: center; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <script>
+    const DATA = /*DATA*/null;
+    const data = DATA || {};
+
+    function append(tag, text, className = "", parent = document.body) {
+      if (!text) return;
+      const element = document.createElement(tag);
+      element.textContent = text;
+      if (className) element.className = className;
+      parent.appendChild(element);
+      return element;
+    }
+
+    function section(title, text) {
+      if (!text) return;
+      append("h3", title);
+      append("p", text);
+    }
+
+    function list(title, items) {
+      const filled = (items || []).filter(Boolean);
+      if (!filled.length) return;
+      append("h3", title);
+      const ul = document.createElement("ul");
+      document.body.appendChild(ul);
+      filled.forEach(text => append("li", text, "", ul));
+    }
+
+    const explanation = data.explanation || {};
+    const hasExplanation = Object.values(explanation).some(value =>
+      Array.isArray(value) ? value.length > 0 : Boolean(value)
+    );
+    if (!data.question && !data.status && !data.error && !hasExplanation) {
+      append("p", "Type your question below.", "muted");
+    }
+    append("p", data.question, "muted");
+    append("p", data.status, "muted");
+    append("p", data.error, "error");
+    append("p", explanation.answer);
+    append("h2", explanation.name);
+    let statement = explanation.statement || "";
+    if (!statement.includes("$") && statement.includes("\\")) {
+      statement = "$$" + statement + "$$";
+    }
+    append("p", statement, "statement");
+    list("Variables", (explanation.variables || [])
+      .filter(variable => variable.symbol || variable.meaning)
+      .map(variable => variable.symbol
+        ? "$" + variable.symbol + "$" + (variable.meaning ? " — " + variable.meaning : "")
+        : variable.meaning));
+    section("When to use", explanation.when_to_use);
+    section("Why it fits here", explanation.why_here);
+    list("Common mistakes", explanation.mistakes);
+    section("Example", explanation.example);
+
+    if (typeof renderMathInElement === "function") {
+      renderMathInElement(document.body, {
+        delimiters: [
+          {left: "$$", right: "$$", display: true},
+          {left: "$", right: "$", display: false}
+        ],
+        throwOnError: false
+      });
+    }
+  </script>
+</body>
+</html>

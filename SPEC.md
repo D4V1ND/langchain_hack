@@ -88,7 +88,7 @@ class Variable(BaseModel):
 class Explanation(BaseModel):
     answer: str                      # always filled; a clarifying question if the Selection is unclear
     name: str = ""
-    statement: str = ""              # LaTeX or a plain sentence
+    statement: str = ""              # maths as $$...$$, or a plain sentence
     variables: list[Variable] = []
     when_to_use: str = ""
     why_here: str = ""
@@ -115,6 +115,7 @@ def consolidate_pending() -> int:
 
 - Every function blocks and can take several seconds. The app always calls them from a worker thread, never the UI thread.
 - The app sends full-size PNGs. The brain decides how to resize them.
+- Any text field may contain maths written as `$...$` (inline) or `$$...$$` (display). The panel typesets it with KaTeX.
 - Changing a signature means telling the other person first.
 
 ---
