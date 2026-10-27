@@ -1,0 +1,7 @@
+PySide6
+pynput
+deepagents
+langchain-openai
+python-dotenv
+pillow
+pytest
