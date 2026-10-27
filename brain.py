@@ -71,6 +71,7 @@ class Explanation(BaseModel):
     why_here: str = ""
     mistakes: list[str] = []
     example: str = ""
+    html: str = ""  # the panel page the model designs for this answer; shown with scripts off
 
 
 # ---------------------------------------------------------------------------
@@ -101,10 +102,17 @@ plain sentence if it is a rule or method.
 - why_here: why it appears in what the student selected.
 - mistakes: common mistakes with this Concept.
 - example: one short worked example.
-Use `answer` alone when you cannot fill the rest.
+- html: the page the student sees in a 440 px wide panel, designed fresh for this \
+answer. Write an HTML fragment (no <html>, <head> or <body>). Lead with the answer, \
+then teach the Concept in whatever layout works best: headings, lists, tables, \
+colour via a <style> block, and inline <svg> for small diagrams. Write maths with \
+MathML (<math>) or <sup>/<sub>, never LaTeX: nothing renders LaTeX in the panel. \
+Scripts, links and external images or fonts are blocked, so don't use them. \
+Keep it under about 300 words.
+Use `answer` and a short `html` alone when you cannot fill the rest.
 
-If the Selection is unreadable or ambiguous, fill in only `answer`, with one \
-clarifying question. Never guess what the student meant.
+If the Selection is unreadable or ambiguous, fill in only `answer` and `html`, with \
+one clarifying question. Never guess what the student meant.
 
 Be accurate. If you are unsure of a step, say so in `answer`.
 
@@ -795,7 +803,8 @@ def ask(session_id: str, question: str) -> Explanation:
 
         last_usage[session.id] = _usage(messages[keep:] if len(messages) > keep else messages)
         session.turns.append(
-            {"question": question, "explanation": explanation.model_dump()}
+            # html is display-only; leaving it out keeps the consolidator's input small.
+            {"question": question, "explanation": explanation.model_dump(exclude={"html"})}
         )
         if not session.images_sent:
             session.images_sent = True

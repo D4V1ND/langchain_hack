@@ -1,4 +1,4 @@
-import json
+from html import escape
 from pathlib import Path
 import sys
 import threading
@@ -15,6 +15,7 @@ from PySide6.QtGui import (
     QPen,
     QTransform,
 )
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
@@ -56,6 +57,26 @@ def make_images(shot: QImage, path: QPainterPath, logical_width: int) -> tuple[b
         return bytes(buffer.data())
 
     return png_bytes(marked), png_bytes(crop)
+
+
+def page(question: str, explanation, status: str, error: str) -> str:
+    """The panel page: our escaped header, then the HTML the AI wrote for this answer."""
+    header = "".join(
+        f'<p class="{cls}">{escape(text)}</p>'
+        for cls, text in (("muted", question), ("muted", status), ("error", error))
+        if text
+    )
+    if explanation is None:
+        body = "" if header else '<p class="muted">Type your question below.</p>'
+    else:
+        body = explanation.html or f"<p>{escape(explanation.answer)}</p>"
+    return TEMPLATE.replace("<!--HEADER-->", header, 1).replace("<!--BODY-->", body, 1)
+
+
+class PanelPage(QWebEnginePage):
+    def acceptNavigationRequest(self, url, kind, is_main_frame):
+        # The page is AI-written: never let a link navigate the panel away.
+        return kind != QWebEnginePage.NavigationType.NavigationTypeLinkClicked
 
 
 def panel_pos(sel: QRect, screen: QRect, w: int, h: int) -> QPoint:
@@ -135,6 +156,8 @@ class Panel(QWidget):
         self.move(panel_pos(selection, screen, self.width(), self.height()))
 
         self.view = QWebEngineView()
+        self.view.setPage(PanelPage(self.view))
+        self.view.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, False)
         self.input = QLineEdit()
         self.input.setPlaceholderText("Ask about your selection…")
         self.input.returnPressed.connect(self.ask)
@@ -144,13 +167,8 @@ class Panel(QWidget):
         self.render()
 
     def render(self, status="", error=""):
-        data = json.dumps({
-            "question": self.question,
-            "explanation": self.explanation.model_dump() if self.explanation is not None else None,
-            "status": status,
-            "error": error,
-        }).replace("</", "<\\/")
-        self.view.setHtml(TEMPLATE.replace("/*DATA*/null", data), QUrl("https://studylens.local/"))
+        html = page(self.question, self.explanation, status, error)
+        self.view.setHtml(html, QUrl("https://studylens.local/"))
 
     def ask(self):
         question = self.input.text().strip()

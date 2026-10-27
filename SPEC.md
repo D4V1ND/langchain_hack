@@ -56,7 +56,7 @@ The student is looking at a worked solution in a PDF and doesn't get one line.
 | What the AI sees | Full Snapshot with the Selection drawn on it in red, plus a zoomed crop | It sees both the surrounding problem and exactly what you mean. No text-recognition (OCR) step |
 | Model | OpenAI GPT (a model that reads images), set in one constant | The team has an OpenAI key |
 | First question | Typed in the panel's text box, the same box used for follow-ups | One input box to build |
-| Panel content | The agent fills fixed fields, shown with one HTML template and KaTeX for the maths | Same look every time, and the same fields feed the Notes |
+| Panel content | The agent designs a fresh HTML page (`html`) for every answer: layout, MathML maths, SVG diagrams. The panel shows it with JavaScript off and outside loads blocked. The agent still fills the fixed fields, which feed the Notes | Each answer gets the layout that teaches it best, and AI-written HTML can't run code |
 | Several Concepts | The panel shows one Concept at a time (whatever the last question was about). Consolidation saves every Concept discussed | Follow-up insights aren't lost |
 | What a Note is about | A **Concept**: a formula, rule, theorem or method | Steps like "odd terms cancel by symmetry" also get Notes |
 | New Selection while a panel is open | Close the old panel (which consolidates it), then start the new one | One panel and one Session at a time |
@@ -94,6 +94,7 @@ class Explanation(BaseModel):
     why_here: str = ""
     mistakes: list[str] = []
     example: str = ""
+    html: str = ""                   # the panel page the AI designs for this answer (HTML, MathML, SVG; no scripts)
 
 NOTEBOOK_PATH: Path                  # data/notebook.html; the tray menu opens it
 
@@ -115,7 +116,7 @@ def consolidate_pending() -> int:
 
 - Every function blocks and can take several seconds. The app always calls them from a worker thread, never the UI thread.
 - The app sends full-size PNGs. The brain decides how to resize them.
-- Any text field may contain maths written as `$...$` (inline) or `$$...$$` (display). The panel typesets it with KaTeX.
+- The panel shows only `html` (or `answer` when `html` is empty). The other fields feed the Notes, and the notebook typesets maths in them with KaTeX.
 - Changing a signature means telling the other person first.
 
 ---

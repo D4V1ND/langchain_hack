@@ -8,7 +8,8 @@ from PySide6.QtGui import QColor, QImage, QPainterPath
 from PySide6.QtCore import QRect
 from PySide6.QtWidgets import QApplication
 
-from app import make_images, panel_pos
+from app import make_images, page, panel_pos
+from brain import Explanation
 
 
 app = QApplication([])
@@ -39,5 +40,11 @@ for screen in (screen, QRect(-1280, -120, 1280, 720)):
     ):
         pos = panel_pos(selection, screen, 200, 180)
         assert screen.contains(QRect(pos.x(), pos.y(), 200, 180))
+
+html = page("<b>q</b>", Explanation(answer="a", html="<svg id='d'></svg>"), "", "")
+assert "&lt;b&gt;q&lt;/b&gt;" in html and "<svg id='d'></svg>" in html
+assert "default-src 'none'" in html
+assert "<p>a &lt; b</p>" in page("", Explanation(answer="a < b"), "", "")
+assert "Type your question below." in page("", None, "", "")
 
 print("ok")
