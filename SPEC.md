@@ -59,6 +59,7 @@ The student is looking at a worked solution in a PDF and doesn't get one line.
 | Opening the Notebook | Tray icon menu: **Open Notebook**, **Quit** | Always reachable |
 | Notebook page | Most recently updated first, each Note collapsible, search box at the top | Shows what you just learned and finds old Notes fast |
 | Agent | One Deep Agent tutors; a "consolidator" sub-agent saves Notes | Uses Deep Agents in both halves |
+| Prompt caching | Use OpenAI's automatic caching (Deep Agents turns it on) and keep the start of every prompt identical | Faster follow-up answers, cheaper image re-sends, no extra code |
 
 ---
 
@@ -127,7 +128,34 @@ Consolidation works from the Transcript file, not from memory, so the same code 
 
 ---
 
-## 6. Errors
+## 6. Prompt caching
+
+OpenAI reuses the start of a prompt (the "prefix") when it matches a recent call exactly. Deep Agents uses this automatically. We only have to avoid breaking it.
+
+Every follow-up question re-sends the whole Session, so everything above the newest question should come from the cache:
+
+```
+[Deep Agents instructions + tool definitions]   same every call     → cached
+[tutor system prompt]                           same every call     → cached
+[Snapshot + crop + question 1]                  same all Session    → cached
+[Explanation 1 … question N-1]                  already sent        → cached
+[question N]                                    new                 → not cached
+```
+
+**Rules**
+
+1. Keep the system prompt fixed: no time, Session id or notes list in it.
+2. Send the Snapshot and crop once, in the first message, with the same image `detail` setting every time.
+3. The consolidator gets Notes through `list_notes`, never through its system prompt.
+4. Never edit or trim earlier messages during a Session.
+
+**Check:** on the second question of a Session, `usage_metadata["input_token_details"]["cache_read"]` should be above 0 (also visible in LangSmith). If it's 0, something near the top of the prompt is changing.
+
+**Limits:** prompts need about 1,024+ tokens to cache, the cache clears after a few minutes idle, and on GPT-5.6+ writing to the cache costs 1.25× normal input, so single-question Sessions gain nothing.
+
+---
+
+## 7. Errors
 
 | Problem | What happens |
 |---|---|
@@ -138,7 +166,7 @@ Consolidation works from the Transcript file, not from memory, so the same code 
 
 ---
 
-## 7. Setup
+## 8. Setup
 
 - Install: `PySide6`, `pynput`, `deepagents`, `langchain-openai` into the `.venv`
 - Set `OPENAI_API_KEY` as an environment variable
@@ -147,7 +175,7 @@ Consolidation works from the Transcript file, not from memory, so the same code 
 
 ---
 
-## 8. Risks to check early
+## 9. Risks to check early
 
 1. **Windows display scaling.** At 125% or 150% scaling, Qt's coordinates and the screenshot's pixels differ, so the red shape can land in the wrong place. Test this first.
 2. **Privacy.** The whole frozen screen goes to OpenAI. The student chooses when, but anything else on that screen goes along with it.
