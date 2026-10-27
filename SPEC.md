@@ -6,6 +6,15 @@ Press a hotkey, draw any shape around a confusing formula or step on your screen
 
 Words in **bold** are defined in [CONTEXT.md](CONTEXT.md).
 
+## Who builds what
+
+| Part | Owner | Spec |
+|---|---|---|
+| **Desktop app**: everything on screen (hotkey, drawing, panel, tray) | Person A | [SPEC-APP.md](SPEC-APP.md) |
+| **Brain**: agent, prompts, context, caching, Notes on disk | Person B (context and caching) | [SPEC-AGENT.md](SPEC-AGENT.md) |
+
+The two parts meet only through the 4 functions in [section 4](#4-the-contract). Agree on those first, then work apart.
+
 ---
 
 ## 1. What the demo does (3-hour MVP)
@@ -63,123 +72,75 @@ The student is looking at a worked solution in a PDF and doesn't get one line.
 
 ---
 
-## 4. Data
+## 4. The contract
 
-### Explanation (what the panel shows, one Concept)
+The app calls these functions in `brain.py`. Nothing else crosses the line: the app never reads or writes `data/`, and the brain never touches the screen.
 
-| Field | Example |
-|---|---|
-| `answer` | "Area is 2-D, so the radius is multiplied by itself." |
-| `name` | Area of a circle |
-| `statement` | `A = \pi r^2` (LaTeX or a plain sentence) |
-| `variables` | `[{symbol: "A", meaning: "area"}, {symbol: "r", meaning: "radius"}]` |
-| `when_to_use` | You need the space inside a circle |
-| `why_here` | The problem asks for the area of the circular base |
-| `mistakes` | `["Using the diameter instead of the radius"]` |
-| `example` | r = 3 → A = 9π ≈ 28.3 |
+```python
+# brain.py (owned by Person B)
+from pathlib import Path
+from pydantic import BaseModel
 
-### Note (one per Concept, in `notes.json`)
+class Variable(BaseModel):
+    symbol: str
+    meaning: str
 
-| Field | Rule |
-|---|---|
-| `id` | Set when the Note is created, never changes |
-| `name`, `statement`, `variables`, `when_to_use` | Change only with a stated reason |
-| `mistakes` | List; only grows |
-| `examples` | List; only grows. Each `why_here` from a Session becomes one example |
-| `insights` | List; only grows. Key points from follow-up questions |
-| `updated_at` | Used to sort the Notebook |
+class Explanation(BaseModel):
+    answer: str                      # always filled; a clarifying question if the Selection is unclear
+    name: str = ""
+    statement: str = ""              # LaTeX or a plain sentence
+    variables: list[Variable] = []
+    when_to_use: str = ""
+    why_here: str = ""
+    mistakes: list[str] = []
+    example: str = ""
 
-### Files on disk (`data/` folder)
+NOTEBOOK_PATH: Path                  # data/notebook.html; the tray menu opens it
 
+def start_session(snapshot_png: bytes, crop_png: bytes) -> str:
+    """Start a Session. snapshot_png already has the Selection drawn in red. Returns a session id."""
+
+def ask(session_id: str, question: str) -> Explanation:
+    """Answer the first question or a follow-up. Raises on API errors."""
+
+def end_session(session_id: str) -> int:
+    """Save the Transcript, run Consolidation, rebuild the notebook. Returns how many Notes were saved.
+    Raises if Consolidation fails; the Transcript is saved first, so it is retried on the next start."""
+
+def consolidate_pending() -> int:
+    """Consolidate any Transcripts not yet saved as Notes. Called once at startup. Returns Notes saved."""
 ```
-data/
-├── notes.json          all Notes
-├── notebook.html       generated from notes.json; open it to revise
-└── sessions/
-    └── 2026-10-27T14-03-11.json   one Transcript: questions, Explanations, consolidated: true/false
-```
 
-The Snapshot image itself is not saved to disk.
+**Rules for both sides**
+
+- Every function blocks and can take several seconds. The app always calls them from a worker thread, never the UI thread.
+- The app sends full-size PNGs. The brain decides how to resize them.
+- Changing a signature means telling the other person first.
 
 ---
 
-## 5. Agent
+## 5. 3-hour plan
 
-**Tutor (main Deep Agent).** It runs on every question and remembers the Session.
-
-| Tool | Does |
-|---|---|
-| `show_explanation(explanation)` | Sends the Explanation fields to the panel |
-
-The Snapshot and Selection go straight into the message as images, so no tool is needed to "read the screen".
-
-**Consolidator (sub-agent).** The tutor hands work to it when a panel closes or when the app starts with unsaved Transcripts.
-
-| Tool | Does |
-|---|---|
-| `read_transcript(id)` | Returns the Session's questions and Explanations |
-| `list_notes()` | Returns every Note's id, name and statement |
-| `get_note(id)` | Returns one full Note |
-| `upsert_note(id or none, fields)` | Creates a Note, or adds to an existing one (lists only grow) |
-
-After the consolidator finishes, plain code (not an agent tool) marks the Transcript `consolidated: true` and rebuilds `notebook.html`.
-
-Consolidation works from the Transcript file, not from memory, so the same code handles a normal close and a retry on startup.
+- **0:00–0:15, together:** agree on the contract, set up the `.venv`, and Person B pushes a **fake `brain.py`** with the exact signatures that returns a fixed "Area of a circle" Explanation. Person A is never blocked after this.
+- **0:15–1:45, apart:** each works down their own task list.
+- **1:45–2:15, together:** swap the fake brain for the real one and run the full flow end to end.
+- **2:15–2:45:** fix what broke.
+- **2:45–3:00:** rehearse the demo.
 
 ---
 
-## 6. Prompt caching
+## 6. Setup
 
-OpenAI reuses the start of a prompt (the "prefix") when it matches a recent call exactly. Deep Agents uses this automatically. We only have to avoid breaking it.
-
-Every follow-up question re-sends the whole Session, so everything above the newest question should come from the cache:
-
-```
-[Deep Agents instructions + tool definitions]   same every call     → cached
-[tutor system prompt]                           same every call     → cached
-[Snapshot + crop + question 1]                  same all Session    → cached
-[Explanation 1 … question N-1]                  already sent        → cached
-[question N]                                    new                 → not cached
-```
-
-**Rules**
-
-1. Keep the system prompt fixed: no time, Session id or notes list in it.
-2. Send the Snapshot and crop once, in the first message, with the same image `detail` setting every time.
-3. The consolidator gets Notes through `list_notes`, never through its system prompt.
-4. Never edit or trim earlier messages during a Session.
-
-**Check:** on the second question of a Session, `usage_metadata["input_token_details"]["cache_read"]` should be above 0 (also visible in LangSmith). If it's 0, something near the top of the prompt is changing.
-
-**Limits:** prompts need about 1,024+ tokens to cache, the cache clears after a few minutes idle, and on GPT-5.6+ writing to the cache costs 1.25× normal input, so single-question Sessions gain nothing.
-
----
-
-## 7. Errors
-
-| Problem | What happens |
-|---|---|
-| The Selection is unreadable or ambiguous | The agent asks a clarifying question in `answer` and leaves the other fields empty |
-| API error while tutoring | The panel shows "Couldn't reach the AI, try again" and the question stays in the box |
-| Consolidation fails, or the app quits mid-save | The Transcript stays `consolidated: false` and is retried on the next start |
-| The agent is still thinking | The text box is disabled and the panel shows "Thinking…". Agent calls run off the UI thread, so the app never freezes |
-
----
-
-## 8. Setup
-
-- Install: `PySide6`, `pynput`, `deepagents`, `langchain-openai` into the `.venv`
+- Install into the `.venv`: `PySide6`, `pynput`, `deepagents`, `langchain-openai`
 - Set `OPENAI_API_KEY` as an environment variable
-- Hotkey default: `Ctrl+Alt+L`, set in one constant
-- KaTeX loads from a CDN (an internet connection is needed for OpenAI anyway)
+- Add `.venv/` and `data/` to `.gitignore`
+- Each person edits only their own files (`app.py` and `panel.html` for A, `brain.py` for B), so both can push to `main` with few conflicts
 
 ---
 
-## 9. Risks to check early
+## 7. Known risk
 
-1. **Windows display scaling.** At 125% or 150% scaling, Qt's coordinates and the screenshot's pixels differ, so the red shape can land in the wrong place. Test this first.
-2. **Privacy.** The whole frozen screen goes to OpenAI. The student chooses when, but anything else on that screen goes along with it.
-3. **Speed.** A Deep Agent turn takes a few seconds. Make sure "Thinking…" shows straight away.
+**Privacy.** The whole frozen screen goes to OpenAI. The student chooses when, but anything else on that screen goes along with it.
 
 ---
 
