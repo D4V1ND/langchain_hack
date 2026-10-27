@@ -8,7 +8,8 @@ from PySide6.QtGui import QColor, QImage, QPainterPath
 from PySide6.QtCore import QRect
 from PySide6.QtWidgets import QApplication
 
-from app import make_images, page, panel_pos
+import io, wave
+from app import RATE, make_images, page, panel_pos, wav_bytes
 from brain import Explanation
 
 
@@ -46,5 +47,8 @@ assert "&lt;b&gt;q&lt;/b&gt;" in html and "<svg id='d'></svg>" in html
 assert "default-src 'none'" in html
 assert "<p>a &lt; b</p>" in page("", Explanation(answer="a < b"), "", "")
 assert "Type your question below." in page("", None, "", "")
+
+with wave.open(io.BytesIO(wav_bytes(b"\x00\x00" * RATE)), "rb") as w:
+    assert (w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()) == (1, 2, RATE, RATE)
 
 print("ok")

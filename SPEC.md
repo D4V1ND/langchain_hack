@@ -2,7 +2,7 @@
 
 **Mark it. Understand it. Remember it.**
 
-Press a hotkey, draw any shape around a confusing formula or step on your screen, type a question, and get an explanation in a small floating panel. When you close the panel, what you learned is saved as notes in your personal Notebook.
+Press a hotkey, draw any shape around a confusing formula or step on your screen, type or say a question, and get an explanation in a small floating panel. When you close the panel, what you learned is saved as notes in your personal Notebook.
 
 Words in **bold** are defined in [CONTEXT.md](CONTEXT.md).
 
@@ -13,7 +13,7 @@ Words in **bold** are defined in [CONTEXT.md](CONTEXT.md).
 | **Desktop app**: everything on screen (hotkey, drawing, panel, tray) | Person A | [SPEC-APP.md](SPEC-APP.md) |
 | **Brain**: agent, prompts, context, caching, Notes on disk | Person B (context and caching) | [SPEC-AGENT.md](SPEC-AGENT.md) |
 
-The two parts meet only through the 4 functions in [section 4](#4-the-contract). Agree on those first, then work apart.
+The two parts meet only through the 5 functions in [section 4](#4-the-contract). Agree on those first, then work apart.
 
 ---
 
@@ -21,13 +21,13 @@ The two parts meet only through the 4 functions in [section 4](#4-the-contract).
 
 1. Press the hotkey. The screen under your mouse freezes (a **Snapshot**).
 2. Draw any shape around what confuses you (a **Selection**).
-3. The **Explanation Panel** opens next to it with a text box. Type your question.
+3. The **Explanation Panel** opens next to it with a text box and a 🎤 button. Type your question, or click 🎤, speak, and click ■.
 4. The agent reads the Snapshot and your question, then shows an **Explanation**.
 5. Ask follow-ups in the same box. The panel updates.
 6. Close the panel. The conversation is saved as a **Transcript**, then turned into **Notes** (**Consolidation**).
 7. Open the **Notebook** from the tray icon to revise.
 
-**Not in the demo:** voice input and spoken answers (add later if time allows), checking maths with a tool, diagrams in explanations, and several panels at once.
+**Not in the demo:** spoken answers (text-to-speech), checking maths with a tool, and several panels at once.
 
 ---
 
@@ -56,6 +56,7 @@ The student is looking at a worked solution in a PDF and doesn't get one line.
 | What the AI sees | Full Snapshot with the Selection drawn on it in red, plus a zoomed crop | It sees both the surrounding problem and exactly what you mean. No text-recognition (OCR) step |
 | Model | OpenAI GPT (a model that reads images), set in one constant | The team has an OpenAI key |
 | First question | Typed in the panel's text box, the same box used for follow-ups | One input box to build |
+| Voice | A 🎤 button records the mic with Qt (16 kHz WAV), `gpt-transcribe` turns it into text, and the question is sent straight away. No LiveKit | A spoken question is one short upload, not a live stream. `gpt-transcribe` is OpenAI's recommended model for recorded speech |
 | Panel content | The agent designs a fresh HTML page (`html`) for every answer: layout, MathML maths, SVG diagrams. The panel shows it with JavaScript off and outside loads blocked. The agent still fills the fixed fields, which feed the Notes | Each answer gets the layout that teaches it best, and AI-written HTML can't run code |
 | Several Concepts | The panel shows one Concept at a time (whatever the last question was about). Consolidation saves every Concept discussed | Follow-up insights aren't lost |
 | What a Note is about | A **Concept**: a formula, rule, theorem or method | Steps like "odd terms cancel by symmetry" also get Notes |
@@ -110,6 +111,9 @@ def end_session(session_id: str) -> int:
 
 def consolidate_pending() -> int:
     """Consolidate any Transcripts not yet saved as Notes. Called once at startup. Returns Notes saved."""
+
+def transcribe(audio_wav: bytes) -> str:
+    """Turn a spoken question (WAV bytes) into text. Raises on API errors."""
 ```
 
 **Rules for both sides**
@@ -148,7 +152,7 @@ def consolidate_pending() -> int:
 
 ## Later
 
-- Voice questions and spoken answers
+- Spoken answers (text-to-speech)
 - A maths-checking tool (SymPy)
 - Diagrams in Explanations
 - Linking a new Selection to the current Session ("how does this step connect to the last one?")

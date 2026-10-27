@@ -1,6 +1,6 @@
 # Desktop app (Person A)
 
-You own everything the student sees and touches. You call the brain only through the 4 functions in the [contract](SPEC.md#4-the-contract), and you never read or write `data/`.
+You own everything the student sees and touches. You call the brain only through the 5 functions in the [contract](SPEC.md#4-the-contract), and you never read or write `data/`.
 
 **Your files:** `app.py` (windows, hotkey, tray) and `panel.html` (the Explanation template).
 
@@ -19,6 +19,7 @@ You own everything the student sees and touches. You call the brain only through
 | 7 | **`panel.html`.** A shell page that blocks outside loads. Show the Explanation's `html` inside it (or `answer` when `html` is empty), with JavaScript turned off and link clicks blocked | The AI's page shows with its MathML maths and SVG diagrams, and a `<script>` in it never runs |
 | 8 | **Close.** Closing the panel, or pressing the hotkey while a panel is open, calls `end_session()` in a worker thread | A new Selection works straight away while the old one saves |
 | 9 | **Tray.** An icon with **Open Notebook** (opens `NOTEBOOK_PATH` in the default browser) and **Quit**. At startup, call `consolidate_pending()` in a worker thread | Notifications show "Saved N notes" or "Couldn't save notes, will retry next start" |
+| 10 | **Voice.** A 🎤 button next to the text box. Click it to record the default mic with `QAudioSource` (16 kHz mono), click ■ to stop, call `transcribe()` in a worker thread, then put the text in the box and send it. Ignore clicks under a quarter second | A spoken question appears as text and is answered. Closing the panel mid-recording stops the mic |
 
 ---
 

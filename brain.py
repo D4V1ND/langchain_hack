@@ -40,6 +40,8 @@ log = logging.getLogger("studylens.brain")
 
 # One constant for the image-reading model. STUDYLENS_MODEL overrides it.
 MODEL = os.getenv("STUDYLENS_MODEL", "openai:gpt-5.1")
+# Speech-to-text for spoken questions; OpenAI's recommended model for recorded speech.
+TRANSCRIBE_MODEL = os.getenv("STUDYLENS_TRANSCRIBE_MODEL", "gpt-transcribe")
 
 # The same `detail` on every image keeps the cached prompt prefix identical.
 IMAGE_DETAIL = "high"
@@ -904,6 +906,18 @@ def consolidate_pending() -> int:
             f" ({total} Notes saved)"
         )
     return total
+
+
+def transcribe(audio_wav: bytes) -> str:
+    """Turn a spoken question (WAV bytes) into text. Raises on API errors."""
+    from openai import OpenAI  # comes with langchain-openai
+
+    result = OpenAI().audio.transcriptions.create(
+        model=TRANSCRIBE_MODEL,
+        file=("question.wav", audio_wav, "audio/wav"),
+        prompt="A student asking about a maths or science formula or solution step on their screen.",
+    )
+    return result.text.strip()
 
 
 # ---------------------------------------------------------------------------

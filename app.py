@@ -1,7 +1,9 @@
 from html import escape
+import io
 from pathlib import Path
 import sys
 import threading
+import wave
 
 from pynput import keyboard
 from PySide6.QtCore import QBuffer, QIODevice, QObject, QPoint, QRect, QTimer, QUrl, Qt, Signal
@@ -15,12 +17,15 @@ from PySide6.QtGui import (
     QPen,
     QTransform,
 )
+from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
+    QHBoxLayout,
     QLineEdit,
     QMenu,
+    QPushButton,
     QStyle,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -32,6 +37,7 @@ import brain
 
 HOTKEY = "<ctrl>+<alt>+l"
 PAD = 40
+RATE = 16000  # mic sample rate: 16 kHz mono 16-bit is plenty for speech
 TEMPLATE = Path(__file__).with_name("panel.html").read_text(encoding="utf-8")
 
 
@@ -71,6 +77,37 @@ def page(question: str, explanation, status: str, error: str) -> str:
     else:
         body = explanation.html or f"<p>{escape(explanation.answer)}</p>"
     return TEMPLATE.replace("<!--HEADER-->", header, 1).replace("<!--BODY-->", body, 1)
+
+
+def wav_bytes(pcm: bytes) -> bytes:
+    """Wrap raw 16 kHz mono 16-bit samples in a WAV file."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(pcm)
+    return buffer.getvalue()
+
+
+class Recorder:
+    """Records the default microphone until stop(), which returns WAV bytes."""
+
+    def __init__(self):
+        fmt = QAudioFormat()
+        fmt.setSampleRate(RATE)
+        fmt.setChannelCount(1)
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        # ponytail: no length cap; a forgotten recording runs until stopped (API limit is 25 MB, ~13 min).
+        self.source = QAudioSource(QMediaDevices.defaultAudioInput(), fmt)
+        self.chunks = []
+        self.io = self.source.start()
+        self.io.readyRead.connect(lambda: self.chunks.append(self.io.readAll().data()))
+
+    def stop(self) -> bytes:
+        self.chunks.append(self.io.readAll().data())
+        self.source.stop()
+        return wav_bytes(b"".join(self.chunks))
 
 
 class PanelPage(QWebEnginePage):
@@ -161,9 +198,17 @@ class Panel(QWidget):
         self.input = QLineEdit()
         self.input.setPlaceholderText("Ask about your selection…")
         self.input.returnPressed.connect(self.ask)
+        self.recorder = None
+        self.mic = QPushButton("🎤")
+        self.mic.setToolTip("Ask by voice")
+        self.mic.setFixedWidth(40)
+        self.mic.clicked.connect(self.toggle_mic)
+        row = QHBoxLayout()
+        row.addWidget(self.input, 1)
+        row.addWidget(self.mic)
         layout = QVBoxLayout(self)
         layout.addWidget(self.view, 1)
-        layout.addWidget(self.input)
+        layout.addLayout(row)
         self.render()
 
     def render(self, status="", error=""):
@@ -177,6 +222,7 @@ class Panel(QWidget):
         self.question = question
         self.asking = True
         self.input.setEnabled(False)
+        self.mic.setEnabled(False)
         self.render(status="Thinking…")
 
         def work():
@@ -194,6 +240,7 @@ class Panel(QWidget):
         self.explanation = explanation
         self.input.clear()
         self.input.setEnabled(True)
+        self.mic.setEnabled(True)
         self.input.setFocus()
         self.render()
 
@@ -203,8 +250,46 @@ class Panel(QWidget):
             self.end_session()
             return
         self.input.setEnabled(True)
+        self.mic.setEnabled(True)
         self.input.setFocus()
         self.render(error="Couldn't reach the AI, try again.")
+
+    def toggle_mic(self):
+        if self.recorder is None:
+            self.recorder = Recorder()
+            self.mic.setText("■")
+            self.mic.setToolTip("Stop and send")
+            self.input.setEnabled(False)
+            self.render(status="Listening… click ■ when you're done.")
+            return
+        audio = self.recorder.stop()
+        self.recorder = None
+        self.mic.setText("🎤")
+        self.mic.setToolTip("Ask by voice")
+        if len(audio) < 44 + RATE // 2:  # under a quarter second: an accidental click
+            self.input.setEnabled(True)
+            self.render()
+            return
+        self.mic.setEnabled(False)
+        self.render(status="Transcribing…")
+        self.controller.in_background(lambda: brain.transcribe(audio), self.heard, self.hear_failed)
+
+    def heard(self, text):
+        self.mic.setEnabled(True)
+        self.input.setEnabled(True)
+        if self.closed:
+            return
+        if not text:
+            self.render(error="Didn't catch that. Try again or type your question.")
+            return
+        self.input.setText(text)
+        self.ask()  # spoken questions are sent straight away
+
+    def hear_failed(self, exc):
+        self.mic.setEnabled(True)
+        self.input.setEnabled(True)
+        if not self.closed:
+            self.render(error="Couldn't transcribe. Try again or type your question.")
 
     def end_session(self):
         # Wait for an in-flight ask before saving its Transcript.
@@ -220,6 +305,9 @@ class Panel(QWidget):
 
     def closeEvent(self, event):
         self.closed = True
+        if self.recorder is not None:
+            self.recorder.stop()
+            self.recorder = None
         self.end_session()
         super().closeEvent(event)
 
