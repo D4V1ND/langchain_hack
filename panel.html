@@ -61,7 +61,8 @@
     append("p", explanation.answer);
     append("h2", explanation.name);
     let statement = explanation.statement || "";
-    if (!statement.includes("$") && statement.includes("\\")) {
+    // The brain sends formulas without $ signs; anything with \ ^ _ or = is treated as maths.
+    if (!statement.includes("$") && /[\\^_=]/.test(statement)) {
       statement = "$$" + statement + "$$";
     }
     append("p", statement, "statement");
